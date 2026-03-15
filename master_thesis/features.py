@@ -8,7 +8,7 @@ from .utils import sanitize_feature_name
 
 
 class FeatureBuilder:
-    """Transform raw zone-level data into leakage-safe, ML-ready features."""
+    """Builds leakage-aware model features from raw zone data."""
 
     def __init__(
         self,
@@ -39,6 +39,14 @@ class FeatureBuilder:
         self.gas_roll_windows = gas_roll_windows
 
     def build(self, raw: pd.DataFrame) -> pd.DataFrame:
+        """Builds the full feature table for one zone.
+
+        Args:
+            raw: Raw zone-level input data.
+
+        Returns:
+            pd.DataFrame: Hourly feature table with target column.
+        """
         if raw.empty:
             return pd.DataFrame()
 
@@ -158,13 +166,21 @@ class FeatureBuilder:
 
 
 class FeaturePreprocessor:
-    """Training-consistent preprocessing."""
+    """Applies training-consistent numeric preprocessing."""
 
     def __init__(self) -> None:
         self.numeric_feature_names: list[str] = []
         self.median_values: pd.Series | None = None
 
     def fit(self, X: pd.DataFrame) -> FeaturePreprocessor:
+        """Fits the preprocessor on a feature matrix.
+
+        Args:
+            X: Raw feature matrix.
+
+        Returns:
+            FeaturePreprocessor: Fitted preprocessor instance.
+        """
         X_clean = X.copy().ffill().replace([np.inf, -np.inf], np.nan)
         numeric_columns = [column for column in X_clean.columns if pd.api.types.is_numeric_dtype(X_clean[column])]
         X_numeric = X_clean[numeric_columns]
@@ -173,6 +189,14 @@ class FeaturePreprocessor:
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Transforms features using fitted preprocessing state.
+
+        Args:
+            X: Raw feature matrix.
+
+        Returns:
+            pd.DataFrame: Numeric, imputed feature matrix.
+        """
         if self.median_values is None:
             raise ValueError("Preprocessor is not fitted.")
         X_clean = X.copy().ffill().replace([np.inf, -np.inf], np.nan)
@@ -180,27 +204,33 @@ class FeaturePreprocessor:
         return X_numeric.fillna(self.median_values)
 
     def fit_transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Fits and transforms a feature matrix in one step."""
         return self.fit(X).transform(X)
 
 
 def base_feature_name(feature_name: str) -> str:
+    """Removes an optional cross-zone prefix from a feature name."""
     return feature_name.split("__", 1)[1] if "__" in feature_name else feature_name
 
 
 def is_local_feature(feature_name: str) -> bool:
+    """Returns whether a feature belongs to the local zone."""
     return "__" not in feature_name
 
 
 def is_price_history_feature(feature_name: str) -> bool:
+    """Returns whether a feature is a lagged or rolling price feature."""
     base = base_feature_name(feature_name)
     return base.startswith("price_eur_mwh_") and ("lag_" in base or "roll_" in base)
 
 
 def is_seasonal_feature(feature_name: str) -> bool:
+    """Returns whether a feature is a calendar control."""
     return base_feature_name(feature_name) in SEASONAL_FEATURES
 
 
 def is_leakage_safe_exogenous_feature(feature_name: str) -> bool:
+    """Checks whether an exogenous feature is allowed at prediction time."""
     base = base_feature_name(feature_name)
     if base in {"price_eur_mwh", "is_spike", "spike_threshold"}:
         return False
@@ -220,6 +250,15 @@ def is_leakage_safe_exogenous_feature(feature_name: str) -> bool:
 
 
 def select_feature_sets(feature_df: pd.DataFrame, target_column: str) -> dict[str, list[str]]:
+    """Splits columns into autoregressive, exogenous, and full sets.
+
+    Args:
+        feature_df: Full feature table.
+        target_column: Target column to exclude from predictors.
+
+    Returns:
+        dict[str, list[str]]: Feature names grouped by specification.
+    """
     all_columns = [column for column in feature_df.columns if column != target_column]
     autoregressive = sorted(
         column
@@ -240,6 +279,16 @@ def build_zone_feature_frames(
     feature_builder: FeatureBuilder,
     gas_frame: pd.DataFrame,
 ) -> dict[str, pd.DataFrame]:
+    """Builds per-zone feature tables from the shared raw dataset.
+
+    Args:
+        raw_all: Combined raw dataset for all zones.
+        feature_builder: Feature builder instance.
+        gas_frame: Hourly gas price controls.
+
+    Returns:
+        dict[str, pd.DataFrame]: Feature table per zone.
+    """
     zone_feature_frames: dict[str, pd.DataFrame] = {}
     for zone in NORWAY_ZONES:
         zone_columns = [column for column in raw_all.columns if column.startswith(f"{zone}__")]
@@ -254,6 +303,15 @@ def build_zone_feature_frames(
 
 
 def assemble_modeling_frame(zone: str, zone_feature_frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Assembles the final modeling frame for one zone.
+
+    Args:
+        zone: Target zone.
+        zone_feature_frames: Feature tables for all zones.
+
+    Returns:
+        pd.DataFrame: Local and cross-zone features for the target zone.
+    """
     base = zone_feature_frames[zone].copy()
     if base.empty:
         return base

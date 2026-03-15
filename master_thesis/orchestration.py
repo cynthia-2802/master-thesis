@@ -11,10 +11,20 @@ from .utils import sanitize_feature_name
 
 
 def filter_flow_pairs_for_zone(zone: str, all_pairs: tuple[tuple[str, str], ...]) -> list[tuple[str, str]]:
+    """Filters interconnector pairs to those touching one zone."""
     return [(a, b) for (a, b) in all_pairs if a == zone or b == zone]
 
 
 def load_or_download_raw_data(cfg: Config, data_loader: EntsoeDataLoader) -> pd.DataFrame:
+    """Loads cached raw data or downloads it if needed.
+
+    Args:
+        cfg: Runtime configuration.
+        data_loader: ENTSO-E data loader.
+
+    Returns:
+        pd.DataFrame: Combined raw dataset for all zones.
+    """
     if cfg.raw_cache_path.exists():
         print(f"Raw data already exists at {cfg.raw_cache_path}, skipping data loading.")
         return pd.read_parquet(cfg.raw_cache_path)
@@ -40,6 +50,11 @@ def load_or_download_raw_data(cfg: Config, data_loader: EntsoeDataLoader) -> pd.
 
 
 def run_pipeline(cfg: Config) -> None:
+    """Runs the full thesis pipeline from raw data to saved outputs.
+
+    Args:
+        cfg: Runtime configuration.
+    """
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
 
     data_loader = EntsoeDataLoader(cfg)

@@ -7,7 +7,15 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class BacktestFold:
-    """One expanding-window validation fold."""
+    """Defines one expanding-window validation fold.
+
+    Attributes:
+        name: Fold identifier used in saved outputs.
+        train_start: Inclusive start of the training window.
+        train_end: Exclusive end of the training window.
+        validation_start: Inclusive start of the validation window.
+        validation_end: Exclusive end of the validation window.
+    """
 
     name: str
     train_start: str
@@ -18,7 +26,30 @@ class BacktestFold:
 
 @dataclass(frozen=True)
 class Config:
-    """Runtime configuration for data retrieval, feature engineering, and evaluation."""
+    """Stores runtime settings for the thesis pipeline.
+
+    Attributes:
+        api_key: ENTSO-E API key.
+        output_dir: Directory for cached data and model outputs.
+        entsoe_tz: Time zone used by ENTSO-E requests.
+        local_tz: Local analysis time zone.
+        study_start: Inclusive start of the raw data study window.
+        study_end: Exclusive end of the raw data study window.
+        test_start: Inclusive start of the final test block.
+        test_end: Exclusive end of the final test block.
+        frequency: Base data frequency.
+        fetch_chunk_months: Chunk size for general ENTSO-E requests.
+        unavailability_chunk_months: Chunk size for outage requests.
+        spike_quantile: Train-sample quantile used to define spikes.
+        random_state: Random seed for model training and sampling.
+        min_train_rows: Minimum allowed train rows.
+        min_validation_rows: Minimum allowed validation rows.
+        min_test_rows: Minimum allowed test rows.
+        shap_background_size: Maximum SHAP background sample size.
+        gas_data_path: Optional explicit path to gas price data.
+        gas_datetime_column: Timestamp column name in gas data.
+        gas_price_column: Price column name in gas data.
+    """
 
     api_key: str
     output_dir: Path = Path("./entsoe_no_experiment")
@@ -43,6 +74,14 @@ class Config:
 
     @classmethod
     def from_env(cls) -> Config:
+        """Builds a config instance from environment variables.
+
+        Returns:
+            Config: Parsed runtime configuration.
+
+        Raises:
+            ValueError: If the ENTSO-E API key is missing.
+        """
         api_key = os.getenv("ENTSOE_API_KEY", "")
         if not api_key:
             raise ValueError("Missing ENTSOE_API_KEY in environment.")
@@ -55,14 +94,17 @@ class Config:
 
     @property
     def raw_cache_path(self) -> Path:
+        """Returns the parquet path used for cached raw data."""
         return self.output_dir / f"raw_{self.study_start[:4]}_{int(self.study_end[:4]) - 1}.parquet"
 
     @property
     def default_gas_path(self) -> Path:
+        """Returns the default parquet path for gas price data."""
         return self.output_dir / "ttf_gas_price.parquet"
 
     @property
     def rolling_folds(self) -> tuple[BacktestFold, ...]:
+        """Returns the configured rolling-origin validation folds."""
         return (
             BacktestFold(
                 name="fold_1",
