@@ -20,6 +20,17 @@ def slice_time_window(
     end: str,
     local_tz: str,
 ) -> pd.DataFrame:
+    """Slices a timezone-aware frame using an inclusive-exclusive window.
+
+    Args:
+        df: Time-indexed data frame.
+        start: Inclusive window start.
+        end: Exclusive window end.
+        local_tz: Analysis time zone.
+
+    Returns:
+        pd.DataFrame: Sliced data frame.
+    """
     if df.empty:
         return df.copy()
     return df.loc[
@@ -28,6 +39,15 @@ def slice_time_window(
 
 
 def final_test_split(df: pd.DataFrame, cfg: Config) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Builds the final train and untouched test blocks.
+
+    Args:
+        df: Full feature table.
+        cfg: Runtime configuration.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: Final train and test frames.
+    """
     if df.empty:
         return df.copy(), df.copy()
     train = slice_time_window(df, cfg.rolling_folds[0].train_start, cfg.test_start, cfg.local_tz)
@@ -36,6 +56,7 @@ def final_test_split(df: pd.DataFrame, cfg: Config) -> tuple[pd.DataFrame, pd.Da
 
 
 def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    """Computes standard regression metrics."""
     return {
         "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
         "mae": float(mean_absolute_error(y_true, y_pred)),
@@ -44,12 +65,14 @@ def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, floa
 
 
 def spike_threshold_from_train(train_target: pd.Series, quantile: float) -> float:
+    """Computes the spike threshold from the training target."""
     if train_target.empty:
         raise ValueError("Train target is empty; cannot compute spike threshold.")
     return float(train_target.quantile(quantile))
 
 
 def add_spike_labels(df: pd.DataFrame, threshold: float) -> pd.DataFrame:
+    """Adds spike labels using a fixed threshold."""
     out = df.copy()
     out["spike_threshold"] = threshold
     out["is_spike"] = (out["price_eur_mwh"] >= threshold).astype(int)
@@ -63,6 +86,19 @@ def train_mean_models(
     cfg: Config,
     target_column: str = "price_eur_mwh",
 ) -> tuple[pd.DataFrame, dict[str, dict[str, float]], dict[str, object]]:
+    """Fits LightGBM and XGBoost mean models on one split.
+
+    Args:
+        train_df: Training data frame.
+        eval_df: Evaluation data frame.
+        feature_names: Selected predictor names.
+        cfg: Runtime configuration.
+        target_column: Target column name.
+
+    Returns:
+        tuple[pd.DataFrame, dict[str, dict[str, float]], dict[str, object]]:
+            Predictions, metrics, and fitted model artifacts.
+    """
     if train_df.empty or eval_df.empty:
         raise ValueError("Train/eval split produced empty dataframes.")
     if not feature_names:
@@ -125,6 +161,19 @@ def train_quantile_models(
     quantiles: tuple[float, ...] = (0.1, 0.5, 0.9),
     target_column: str = "price_eur_mwh",
 ) -> pd.DataFrame:
+    """Fits LightGBM quantile models for one evaluation split.
+
+    Args:
+        train_df: Training data frame.
+        eval_df: Evaluation data frame.
+        feature_names: Selected predictor names.
+        cfg: Runtime configuration.
+        quantiles: Quantiles to estimate.
+        target_column: Target column name.
+
+    Returns:
+        pd.DataFrame: Quantile predictions and true values.
+    """
     X_train_raw = train_df[feature_names].copy()
     X_eval_raw = eval_df[feature_names].copy()
     y_train = train_df[target_column].copy()
@@ -159,6 +208,18 @@ def shap_global_importance(
     background_size: int,
     max_display: int = 25,
 ) -> pd.DataFrame:
+    """Computes global SHAP importance and saves a bar plot.
+
+    Args:
+        model: Fitted tree model.
+        X: Feature matrix used for SHAP.
+        output_path: Plot output path.
+        background_size: Maximum SHAP background sample size.
+        max_display: Maximum number of displayed features.
+
+    Returns:
+        pd.DataFrame: Mean absolute SHAP importance per feature.
+    """
     if X.empty or X.shape[1] == 0:
         raise ValueError("SHAP input matrix is empty.")
 
@@ -196,6 +257,18 @@ def run_for_feature_set(
     cfg: Config,
     feature_set: Literal["autoregressive", "exogenous", "full"],
 ) -> tuple[pd.DataFrame, list[dict[str, object]], pd.DataFrame, list[dict[str, object]]]:
+    """Runs rolling validation and final test for one feature set.
+
+    Args:
+        zone: Target zone.
+        feature_df: Full modeling frame for the zone.
+        cfg: Runtime configuration.
+        feature_set: Feature specification to run.
+
+    Returns:
+        tuple[pd.DataFrame, list[dict[str, object]], pd.DataFrame, list[dict[str, object]]]:
+            Predictions, metric rows, SHAP importance, and run-status rows.
+    """
     selected_features = select_feature_sets(feature_df, target_column="price_eur_mwh")[feature_set]
     if not selected_features:
         raise ValueError(f"Feature set '{feature_set}' is empty.")
@@ -204,7 +277,6 @@ def run_for_feature_set(
     metric_rows: list[dict[str, object]] = []
     status_rows: list[dict[str, object]] = []
     final_artifacts: dict[str, object] | None = None
-    final_train_df = pd.DataFrame()
 
     for fold in cfg.rolling_folds:
         fold_train, fold_validation = rolling_fold_split(feature_df, fold, cfg.local_tz)
@@ -232,7 +304,6 @@ def run_for_feature_set(
         metric_rows.extend(metric_rows_for_split(zone, feature_set, fold.name, "validation", fold_combined, validation_metrics))
         status_rows.append({"zone": zone, "feature_set": feature_set, "fold": fold.name, "dataset_split": "validation", "status": "ok", "error": ""})
         final_artifacts = artifacts
-        final_train_df = fold_train
 
     test_train_df, test_df = final_test_split(feature_df, cfg)
     if len(test_train_df) < cfg.min_train_rows or len(test_df) < cfg.min_test_rows:
@@ -273,6 +344,7 @@ def run_for_feature_set(
 
 
 def rolling_fold_split(df: pd.DataFrame, fold: BacktestFold, local_tz: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Builds train and validation frames for one rolling fold."""
     train = slice_time_window(df, fold.train_start, fold.train_end, local_tz)
     validation = slice_time_window(df, fold.validation_start, fold.validation_end, local_tz)
     return train, validation
@@ -286,6 +358,7 @@ def metric_rows_for_split(
     combined: pd.DataFrame,
     metrics: dict[str, dict[str, float]],
 ) -> list[dict[str, object]]:
+    """Formats metric rows for one evaluation split."""
     rows: list[dict[str, object]] = []
     for model_name, metric in metrics.items():
         rows.append(
@@ -319,6 +392,14 @@ def metric_rows_for_split(
 
 
 def summarize_metrics(metric_frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Builds validation summaries and selected-model tables.
+
+    Args:
+        metric_frame: Raw fold-level metric rows.
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: Validation summary table and selected-model table.
+    """
     validation_summary = (
         metric_frame[metric_frame["dataset_split"] == "validation"]
         .groupby(["zone", "feature_set", "model", "sample"], as_index=False)[["rmse", "mae", "r2"]]
